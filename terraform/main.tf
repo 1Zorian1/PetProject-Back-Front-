@@ -1,103 +1,90 @@
-terraform {
-  required_version = ">= 1.5.0"
+name: Deploy Infrastructure and App to AWS
 
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.80.0"
-    }
-  }
-}
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-provider "aws" {
-  region = var.aws_region
-}
+jobs:
+  # -------------------------------------------------------------
+  # 1. TERRAFORM: Створення / Оновлення інфраструктури
+  # -------------------------------------------------------------
+  terraform:
+    name: "1. Terraform Infrastructure"
+    runs-on: ubuntu-latest
 
-# 1. SSH Key Pair для доступу до EC2
-resource "aws_key_pair" "deployer" {
-  key_name   = "petproject-deployer-key"
-  public_key = var.public_key
-}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-# 2. Security Group (Мережеві правила)
-resource "aws_security_group" "web_sg" {
-  name        = "petproject-web-sg"
-  description = "Allow HTTP, API and SSH traffic"
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
 
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
 
-  ingress {
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+      - name: Terraform Plan
+        run: terraform plan
+        working-directory: ./terraform
+        env:
+          TF_VAR_public_key: ${{ secrets.EC2_SSH_PUBLIC_KEY }}
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: ./terraform
+        env:
+          TF_VAR_public_key: ${{ secrets.EC2_SSH_PUBLIC_KEY }}
 
-  tags = {
-    Name = "petproject-web-sg"
-  }
-}
+      - name: Save EC2 Public IP
+        id: get-ip
+        run: |
+          EC2_IP=$(terraform output -raw public_ip)
+          echo "EC2_IP=$EC2_IP" >> $GITHUB_OUTPUT
+        working-directory: ./terraform
 
-# 3. AMI Ubuntu 22.04 LTS
-data "aws_ami" "ubuntu" {
-  most_recent = true
+    outputs:
+      ec2_ip: ${{ steps.get-ip.outputs.EC2_IP }}
 
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
+  # -------------------------------------------------------------
+  # 2. DEPLOY: Деплой додатку через SSH на новий EC2
+  # -------------------------------------------------------------
+  deploy:
+    name: "2. Deploy App via Docker Compose"
+    runs-on: ubuntu-latest
+    needs: terraform
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-  owners = ["099720109477"] # Canonical
-}
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-# 4. Створення EC2 Інстансу
-resource "aws_instance" "web" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
-  key_name               = aws_key_pair.deployer.key_name
-  vpc_security_group_ids = [aws_security_group.web_sg.id]
+      - name: Wait for EC2 initialization
+        run: sleep 30
 
-  user_data = <<-EOF
-              #!/bin/bash
-              apt-get update -y
-              apt-get install -y ca-certificates curl gnupg lsb-release
-              
-              mkdir -p /etc/apt/keyrings
-              curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-              echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-              apt-get update -y
-              apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+      - name: Copy files to EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform.outputs.ec2_ip }} "mkdir -p ~/app"
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --exclude '.git' --exclude 'terraform' ./ ubuntu@${{ needs.terraform.outputs.ec2_ip }}:~/app/
 
-              usermod -aG docker ubuntu
-              systemctl enable docker
-              systemctl start docker
-              EOF
-
-  tags = {
-    Name = "PetProject-Server"
-  }
-}
+      - name: Build and Run App on EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform.outputs.ec2_ip }} "
+            cd ~/app && \
+            docker compose down && \
+            docker compose up -d --build
+          "
