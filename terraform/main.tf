@@ -15,7 +15,7 @@ provider "aws" {
 
 # 1. SSH Key Pair
 resource "aws_key_pair" "deployer" {
-  key_name   = "petproject-deployer-key22"
+  key_name   = "petproject-deployer-key32"
   public_key = var.public_key
 }
 
