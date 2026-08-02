@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # 1. База даних PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: notes_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: notesdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+
+  # 2. Бекенд на FastAPI
+  backend:
+    build: ./backend
+    container_name: notes_backend
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://user:password@db:5432/notesdb
+    depends_on:
+      - db
+    networks:
+      - app-network
+
+  # 3. Фронтенд на Nginx
+  frontend:
+    build: ./frontend
+    container_name: notes_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+# Створюємо Volume, щоб дані бази даних зберігалися навіть після зупинки контейнерів
+volumes:
+  postgres_data:
+
+# Створюємо спільну мережу для зв'язку між контейнерами
+networks:
+  app-network:
+    driver: bridge

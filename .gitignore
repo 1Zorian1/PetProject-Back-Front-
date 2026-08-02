@@ -1,0 +1,15 @@
+# Terraform (тимчасові файли та стан)
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform.lock.hcl
+
+# Секрети та налаштування
+.env
+*.pem
+*.key
+
+# Системні файли та логи
+*.log
+.DS_Store

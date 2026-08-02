@@ -1,0 +1,82 @@
+name: Deploy Infrastructure and App to AWS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Дозволяє запускати деплой вручну через кнопочку в GitHub
+
+jobs:
+  # -------------------------------------------------------------
+  # 1. ТАП TERRAFORM: Перевірка та розгортання інфраструктури
+  # -------------------------------------------------------------
+  terraform:
+    name: "1. Terraform Infrastructure"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve
+        working-directory: ./terraform
+
+      - name: Save EC2 Public IP
+        id: get-ip
+        run: |
+          EC2_IP=$(terraform output -raw ec2_public_ip)
+          echo "EC2_IP=$EC2_IP" >> $GITHUB_OUTPUT
+        working-directory: ./terraform
+
+    outputs:
+      ec2_ip: ${{ steps.get-ip.outputs.EC2_IP }}
+
+  # -------------------------------------------------------------
+  # 2. ЕТАП DEPLOY: Копіювання файлів та запуск Docker Compose
+  # -------------------------------------------------------------
+  deploy:
+    name: "2. Deploy App via Docker Compose"
+    runs-on: ubuntu-latest
+    needs: terraform # Запускається тільки ПОСЛЯ успішного Terraform
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+
+      - name: Wait for EC2 initialization
+        run: sleep 30 # Даємо EC2 секунд 30 на завершення user_data (встановлення Docker)
+
+      - name: Copy files to EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform.outputs.ec2_ip }} "mkdir -p ~/app"
+          rsync -avz -e "ssh -o StrictHostKeyChecking=no" --exclude '.git' --exclude 'terraform' ./ ubuntu@${{ needs.terraform.outputs.ec2_ip }}:~/app/
+
+      - name: Build and Run App on EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ubuntu@${{ needs.terraform.outputs.ec2_ip }} "
+            cd ~/app && \
+            docker compose down && \
+            docker compose up -d --build
+          "

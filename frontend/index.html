@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DevOps Notes App</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; background-color: #f4f4f9; }
+        h1 { color: #333; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
+        input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        ul { list-style: none; padding: 0; }
+        li { background: white; padding: 12px; border-bottom: 1px solid #ddd; border-radius: 4px; margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+    <h1>📋 DevOps Notes App</h1>
+    <div class="input-group">
+        <input type="text" id="noteInput" placeholder="Введіть нотатку...">
+        <button onclick="addNote()">Додати</button>
+    </div>
+    <ul id="notesList"></ul>
+
+    <script>
+        const API_URL = '/api/notes';
+
+        async function fetchNotes() {
+            try {
+                const res = await fetch(API_URL);
+                if (!res.ok) throw new Error('Помилка завантаження');
+                const notes = await res.json();
+                const list = document.getElementById('notesList');
+                list.innerHTML = '';
+                notes.forEach(note => {
+                    const li = document.createElement('li');
+                    li.textContent = note.content;
+                    list.appendChild(li);
+                });
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        async function addNote() {
+            const input = document.getElementById('noteInput');
+            const content = input.value.trim();
+            if (!content) return;
+
+            try {
+                const res = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content })
+                });
+                if (res.ok) {
+                    input.value = '';
+                    fetchNotes();
+                }
+            } catch (err) {
+                console.error(err);
+            }
+        }
+
+        fetchNotes();
+    </script>
+</body>
+</html>
